@@ -1,0 +1,8 @@
+widgets:
+    -
+        position: left
+        type: profile
+        avatar: /img/log.jpg
+    -
+        position: left
+        type: toc
