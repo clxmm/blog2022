@@ -1,5 +1,5 @@
 ---
-title: 01动态生成world
+title: 01jsckson简介
 toc: true
 tags: java
 categories: 
@@ -124,5 +124,34 @@ Data format modules(数据格式模块)提供对**JSON之外**的数据格式的
 
 官网有说，Jackson是一个**JVM平台**的解析器，因此语言层面不局限于Java本身，还涵盖了另外两大主流JVM语言：Kotlin和Scala
 
+> 说明：这块的groupId均为：`<groupId>com.fasterxml.jackson.module</groupId>`，版本号跟着主版本号走
 
+- jackson-module-kotlin：处理kotlin源生类型
+- jackson-module-scala_[scala版本号]：处理scala源生类型
+
+### 5.模式支持
+
+Jackson注解为POJO定义了预期的属性和预期的处理，除了Jackson本身将其用于读取/写入JSON和其他格式之外，它还允许生成**外部模式**。上面已讲述的数据格式扩展中包含了部分功能，但也仍还有许多独立的模式工具，如：
+
+- Ant Task for JSON Schema Generation：使用Apache Ant时，使用Jackson库和扩展模块从Java类生成JSON
+- jackson-json-schema-maven-plugin：maven插件，用于生成JSON
+
+> 说明：本部分因实际应用场景实在太少，为了不要混淆主要内容，此部分后面亦不会再提及
+
+### 6.Jackson jr（用于移动端）
+
+虽然`Jackson databind`（如ObjectMapper）是通用数据绑定的良好选择，但它的**占用空间（Jar包大小）**和**启动开销**在某些领域可能存在问题：比如移动端，特别是对于轻量使用(读或写)。这种case下，完整的Jackson API是让人接受不了的。
+
+由于所有这些原因，Jackson官方决定创建一个**更简单、更小**的库：Jackson jr。它仍旧构建在Streaming API之上，但不依赖于databind和annotation。因此，它的大小(jar和运行时内存使用)要小得多，它的API非常紧凑，所以适合APP等移动端。
+
+```xml
+<dependency>
+    <groupId>com.fasterxml.jackson.jr</groupId>
+    <artifactId>jackson-jr-objects</artifactId>
+</dependency>
+```
+
+它仅仅只依赖了`jackson-core`模块，所以体积上控制得非常的好。Jackson单单三大核心模块大小合计1700KB左右（320 + 70 + 1370）。而Jackson jr的体积控制在了95KB（就算加上core模块的320也不到500KB）。
+
+而对于开发Java后台的我们对内存并不敏感，简单易用、功能强大才是硬道理。因此`jackson-jr`只是在此处做个简单了解即可，本专栏后面也不会再提及。
 

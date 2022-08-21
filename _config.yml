@@ -105,4 +105,4 @@ deploy:
   type: git
   repo: git@github.com:clxmm/clxmm.github.io.git
   branch: master
-  message: init
+  message: init1
