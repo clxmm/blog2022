@@ -1,14 +1,14 @@
 ---
 title: 01动态生成world
 toc: true
-tags: java
+tags: spring
 categories: 
     - [java]
-    - [jackson]
+    - [spring]
 ---
 
 
-## 1.
+##  1.IOC的思想引入【重点】
 
 <!--more-->
 
