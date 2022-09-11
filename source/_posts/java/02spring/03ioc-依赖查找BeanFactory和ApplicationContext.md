@@ -97,7 +97,7 @@ demoDaoOracle: org.clxmm.basic_dl.c_oftype.dao.impl.DemoDaoOracle@598067a5
 
 在官方文档 [docs.spring.io/spring/docs…](https://docs.spring.io/spring/docs/5.2.x/spring-framework-reference/core.html#beans-introduction) 中，有一个段落解释了这两个接口的关系：
 
-> The `org.springframework.beans` and `org.springframework.context` packages are the basis for Spring Framework’s IoC container. The [`BeanFactory`](https://docs.spring.io/spring-framework/docs/5.2.x/javadoc-api/org/springframework/beans/factory/BeanFactory.html interface provides an advanced configuration mechanism capable of managing any type of object. [`ApplicationContext`](https://docs.spring.io/spring-framework/docs/5.2.x/javadoc-api/org/springframework/context/ApplicationContext.html) is a sub-interface of `BeanFactory`. It adds:
+> The `org.springframework.beans` and `org.springframework.context` packages are the basis for Spring Framework’s IoC container. The [`BeanFactory`](https://docs.spring.io/spring-framework/docs/5.2.x/javadoc-api/org/springframework/beans/factory/BeanFactory.html) interface provides an advanced configuration mechanism capable of managing any type of object. [`ApplicationContext`](https://docs.spring.io/spring-framework/docs/5.2.x/javadoc-api/org/springframework/context/ApplicationContext.html) is a sub-interface of `BeanFactory`. It adds:
 >
 > - Easier integration with Spring’s AOP features
 > - Message resource handling (for use in internationalization)
