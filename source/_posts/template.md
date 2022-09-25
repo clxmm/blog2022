@@ -1,10 +1,10 @@
 ---
 title: 01动态生成world
 toc: true
-tags: spring
+tags: RocketMq
 categories: 
     - [java]
-    - [spring]
+    - [RocketMq]
 ---
 
 
