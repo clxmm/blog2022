@@ -315,3 +315,421 @@ public class SomeConsumer {
 
 
 
+## 五、批量消息
+
+### **1** 批量发送消息
+
+**发送限制**
+
+生产者进行消息发送时可以一次发送多条消息，这可以大大提升Producer的发送效率。不过需要注意以 下几点:
+
+- 批量发送的消息必须具有相同的Topic 
+- 批量发送的消息必须具有相同的刷盘策略 
+- 批量发送的消息不能是延时消息与事务消息
+
+**批量发送大小**
+
+默认情况下，一批发送的消息总大小不能超过4MB字节。如果想超出该值，有两种解决方案:
+
+- 方案一:将批量消息进行拆分，拆分为若干不大于4M的消息集合分多次批量发送 
+- 方案二:在Producer端与Broker端修改属性
+
+**Producer端需要在发送之前设置Producer的maxMessageSize属性**
+
+**Broker端需要修改其加载的配置文件中的maxMessageSize属性**
+
+**生产者发送的消息大小**
+
+![](/img/202209/02rocketmq20.png)
+
+生产者通过send()方法发送的Message，并不是直接将Message序列化后发送到网络上的，而是通过这 个Message生成了一个字符串发送出去的。这个字符串由四部分构成:Topic、消息Body、消息日志 (占20字节)，及用于描述消息的一堆属性key-value。这些属性中包含例如生产者地址、生产时间、 要发送的QueueId等。最终写入到Broker中消息单元中的数据都是来自于这些属性
+
+
+### **2** 批量消费消息
+
+**修改批量属性**
+
+
+
+Consumer的MessageListenerConcurrently监听接口的consumeMessage()方法的第一个参数为消息列 表，但默认情况下每次只能消费一条消息。若要使其一次可以消费多条消息，则可以通过修改 Consumer的consumeMessageBatchMaxSize属性来指定。不过，该值不能超过32。因为默认情况下消 费者每次可以拉取的消息最多是32条。若要修改一次拉取的最大值，则可通过修改Consumer的 pullBatchSize属性来指定。
+
+**存在的问题**
+
+Consumer的pullBatchSize属性与consumeMessageBatchMaxSize属性是否设置的越大越好?当然不 是。
+
+- pullBatchSize值设置的越大，Consumer每拉取一次需要的时间就会越长，且在网络上传输出现 问题的可能性就越高。若在拉取过程中若出现了问题，那么本批次所有消息都需要全部重新拉 取。
+- consumeMessageBatchMaxSize值设置的越大，Consumer的消息并发消费能力越低，且这批被消 费的消息具有相同的消费结果。因为consumeMessageBatchMaxSize指定的一批消息只会使用一 个线程进行处理，且在处理过程中只要有一个消息处理异常，则这批消息需要全部重新再次消费 处理。
+
+### **3** 代码举例
+
+该批量发送的需求是，不修改最大发送4M的默认值，但要防止发送的批量消息超出4M的限制。
+
+**定义消息列表分割器**
+
+```java
+public class MessageListSplitter implements Iterator<List<Message>> {
+
+
+    // 消息列表分割器:其只会处理每条消息的大小不超4M的情况。
+    // 若存在某条消息，其本身大小大于4M，这个分割器无法处理，
+    // 其直接将这条消息构成一个子列表返回。并没有再进行分割
+
+
+    // 指定极限值为4M
+    private final int SIZE_LIMIT = 4 * 1024 * 1024;
+    // 存放所有要发送的消息
+    private final List<Message> messages;
+    // 要进行批量发送消息的小集合起始索引
+    private int currIndex;
+
+
+    public MessageListSplitter(List<Message> messages) {
+        this.messages = messages;
+    }
+
+
+    @Override
+    public boolean hasNext() {
+        // 判断当前开始遍历的消息索引要小于消息总数
+        return currIndex < messages.size();
+    }
+
+    @Override
+    public List<Message> next() {
+        int nextIndex = currIndex;
+        // 记录当前要发送的这一小批次消息列表的大小
+        int totalSize = 0;
+        for (; nextIndex < messages.size(); nextIndex++) {
+            // 获取当前遍历的消息
+            Message message = messages.get(nextIndex);
+
+            // 统计当前遍历的message的大小
+            int tmpSize = message.getTopic().length() +
+                    message.getBody().length;
+            Map<String, String> properties = message.getProperties();
+            for (Map.Entry<String, String> entry :
+                    properties.entrySet()) {
+                tmpSize += entry.getKey().length() +
+                        entry.getValue().length();
+            }
+            tmpSize = tmpSize + 20;
+
+            // 判断当前消息本身是否大于4M
+            if (tmpSize > SIZE_LIMIT) {
+                if (nextIndex - currIndex == 0) {
+                    nextIndex++;
+                }
+                break;
+            }
+
+
+            if (tmpSize + totalSize > SIZE_LIMIT) {
+                break;
+            } else {
+                totalSize += tmpSize;
+            }
+
+        }  // end-for
+
+
+        // 获取当前messages列表的子集合[currIndex, nextIndex)
+        List<Message> subList = messages.subList(currIndex, nextIndex); // 下次遍历的开始索引
+        currIndex = nextIndex;
+        return subList;
+    }
+
+
+}
+```
+
+**定义批量消息生产者**
+
+```java
+public class BatchProducer {
+
+    public static void main(String[] args) throws Exception {
+        DefaultMQProducer producer = new DefaultMQProducer("pg");
+        producer.setNamesrvAddr(RocketConstant.nameservAddr);
+
+
+        // 指定要发送的消息的最大大小，默认是4M
+        // 不过，仅修改该属性是不行的，还需要同时修改broker加载的配置文件中的
+        // maxMessageSize属性
+        // producer.setMaxMessageSize(8 * 1024 * 1024);
+        producer.start();
+
+
+        // 定义要发送的消息集合
+        List<Message> messages = new ArrayList<>();
+
+        for (int i = 0; i < 100; i++) {
+            byte[] body = ("Hi," + i).getBytes();
+            Message msg = new Message("someTopiE", "someTagE", body);
+            messages.add(msg);
+        }
+
+        // 定义消息列表分割器，将消息列表分割为多个不超出4M大小的小列表
+
+        MessageListSplitter splitter = new
+                MessageListSplitter(messages);
+
+
+        while (splitter.hasNext()) {
+            try {
+                List<Message> listItem = splitter.next();
+                producer.send(listItem);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+
+        producer.shutdown();
+    }
+}
+```
+
+**定义批量消息消费者**
+
+```java
+public class BatchConsumer {
+
+
+    public static void main(String[] args) throws Exception {
+        DefaultMQPushConsumer consumer = new
+                DefaultMQPushConsumer("cg");
+
+        consumer.setNamesrvAddr(RocketConstant.nameservAddr);
+
+        consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
+        consumer.subscribe("someTopiE", "*");
+
+
+        // 指定每次可以消费10条消息，默认为1
+        consumer.setConsumeMessageBatchMaxSize(10);
+        // 指定每次可以从Broker拉取40条消息，默认为32
+        consumer.setPullBatchSize(40);
+
+        consumer.registerMessageListener(new MessageListenerConcurrently() {
+            @Override
+            public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs, ConsumeConcurrentlyContext context) {
+                for (MessageExt msg : msgs) {
+                    System.out.println(msg);
+                }
+
+                // 消费成功的返回结果
+                return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+                // 消费异常时的返回结果
+                // return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+            }
+        });
+
+        consumer.start();
+        System.out.println("Consumer Started");
+
+    }
+
+}
+```
+
+
+
+## 六、消息过滤
+
+消息者在进行消息订阅时，除了可以指定要订阅消息的Topic外，还可以对指定Topic中的消息根据指定条件进行过滤，即可以订阅比Topic更加细粒度的消息类型。
+
+### **1 Tag**过滤
+
+通过consumer的subscribe()方法指定要订阅消息的Tag。如果订阅多个Tag的消息，Tag间使用或运算 符(双竖线||)连接。
+
+```java
+DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("CID_EXAMPLE");
+consumer.subscribe("TOPIC", "TAGA || TAGB || TAGC");
+```
+
+### **2 SQL**过滤
+
+SQL过滤是一种通过特定表达式对事先埋入到消息中的用户属性进行筛选过滤的方式。通过SQL过滤，可以实现对消息的复杂过滤。不过，只有使用PUSH模式的消费者才能使用SQL过滤。
+
+支持的常量类型:
+
+- 数值:比如:123，3.1415 
+- 字符:必须用单引号包裹起来，比如:'abc' 
+- 布尔:TRUE 或 FALSE NULL:
+- 特殊的常量，表示空
+
+支持的运算符有:
+
+- 数值比较:>，>=，<，<=，BETWEEN，= 
+- 字符比较:=，<>，IN
+- 逻辑运算 :AND，OR，NOT NULL
+- 判断:IS NULL 或者 IS NOT NULL
+
+默认情况下Broker没有开启消息的SQL过滤功能，需要在Broker加载的配置文件中添加如下属性，以开 启该功能:
+
+```
+enablePropertyFilter = true
+```
+
+在启动Broker时需要指定这个修改过的配置文件。例如对于单机Broker的启动，其修改配置文件是 conf/broker.conf，启动时使用如下命令:
+
+```
+sh bin/mqbroker -n localhost:9876 -c conf/broker.conf &
+```
+
+### **3** 代码举例
+
+定义**Tag**过滤**Producer**
+
+```java
+public class FilterByTagProducer {
+
+    public static void main(String[] args) throws Exception {
+
+        DefaultMQProducer producer = new DefaultMQProducer("pg");
+        producer.setNamesrvAddr(RocketConstant.nameservAddr);
+        producer.start();
+
+        String[] tags = {"myTagA", "myTagB", "myTagC"};
+        for (int i = 0; i < 10; i++) {
+            byte[] body = ("Hi," + i).getBytes();
+            String tag = tags[i % tags.length];
+            Message msg = new Message("myTopic", tag, body);
+            SendResult sendResult = producer.send(msg);
+            System.out.println(sendResult);
+        }
+
+        producer.shutdown();
+    }
+}
+```
+
+**定义**Tag**过滤**Consumer
+
+```java
+public class FilterByTagConsumer {
+
+
+    public static void main(String[] args) throws Exception {
+        DefaultMQPushConsumer consumer = new
+                DefaultMQPushConsumer("pg");
+        consumer.setNamesrvAddr(RocketConstant.nameservAddr);
+        consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
+        consumer.subscribe("myTopic", "myTagA || myTagB");
+        consumer.registerMessageListener(new MessageListenerConcurrently() {
+            @Override
+            public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs, ConsumeConcurrentlyContext context) {
+                for (MessageExt me : msgs) {
+                    System.out.println(me);
+                }
+
+                return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+            }
+        });
+        consumer.start();
+        System.out.println("Consumer Started");
+
+    }
+}
+```
+
+**定义**SQL**过滤**Producer
+
+```java
+public class FilterBySQLProducer {
+
+
+    public static void main(String[] args) throws Exception {
+        DefaultMQProducer producer = new DefaultMQProducer("pg");
+        producer.setNamesrvAddr(RocketConstant.nameservAddr);
+        producer.start();
+        for (int i = 0; i < 10; i++) {
+            try {
+                byte[] body = ("Hi," + i).getBytes();
+                Message msg = new Message("myTopic", "myTag", body);
+                msg.putUserProperty("age", i + "");
+                SendResult sendResult = producer.send(msg);
+                System.out.println(sendResult);
+            } catch (Exception e) {
+                e.printStackTrace();
+            } }
+        producer.shutdown();
+
+
+
+
+
+    }
+}
+```
+
+**定义**SQL**过滤**Consumer
+
+```java
+public class FilterBySQLConsumer {
+
+    public static void main(String[] args) throws Exception {
+        DefaultMQPushConsumer consumer = new
+                DefaultMQPushConsumer("pg");
+        consumer.setNamesrvAddr(RocketConstant.nameservAddr);
+        consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
+        consumer.subscribe("myTopic", MessageSelector.bySql("age between 0 and 6"));
+        consumer.registerMessageListener(new MessageListenerConcurrently() {
+            @Override
+            public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs, ConsumeConcurrentlyContext context) {
+                for (MessageExt me : msgs) {
+                    System.out.println(me);
+                }
+
+                return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+            }
+        });
+        consumer.start();
+        System.out.println("Consumer Started");
+
+    }
+}
+```
+
+
+
+## 七、消息发送重试机制
+
+### **1** 说明
+
+Producer对发送失败的消息进行重新发送的机制，称为消息发送重试机制，也称为消息重投机制。
+
+对于消息重投，需要注意以下几点:
+
+- 生产者在发送消息时，若采用 同步或异步发送 方式，发送失败 会重试 ，但oneway消息发送方式发送失败是没有重试机制的
+- 只有普通消息具有发送重试机制，顺序消息是没有的 
+- 消息重投机制可以保证消息尽可能发送成功、不丢失，但可能会造成消息重复。消息重复在 RocketMQ中是无法避免的问题 
+- 消息重复在一般情况下不会发生，当出现消息量大、网络抖动，消息重复就会成为大概率事件 producer主动重发、consumer负载变化(发生Rebalance，不会导致消息重复，但可能出现重复 消费)也会导致重复消息
+- 消息重复无法避免，但要避免消息的重复消费。 避免消息重复消费的解决方案是，为消息添加唯一标识(例如消息key)，使消费者对消息进行消 费判断来避免重复消费 
+- 消息发送重试有三种策略可以选择:同步发送失败策略、异步发送失败策略、消息刷盘失败策略
+
+### **2** 同步发送失败策略
+
+对于普通消息，消息发送默认采用round-robin策略来选择所发送到的队列。如果发送失败，默认重试2 次。但在重试时是不会选择上次发送失败的Broker，而是选择其它Broker。当然，若只有一个Broker其 也只能发送到该Broker，但其会尽量发送到该Broker上的其它Queue。
+
+```java
+ // 创建一个producer，参数为Producer Group名称 
+DefaultMQProducer producer = new DefaultMQProducer("pg"); \
+  // 指定nameServer地址 
+  producer.setNamesrvAddr("rocketmqOS:9876");
+// 设置同步发送失败时重试发送的次数，默认为2次 
+producer.setRetryTimesWhenSendFailed(3);
+// 设置发送超时时限为5s，默认3s 
+producer.setSendMsgTimeout(5000);
+```
+
+同时，Broker还具有 失败隔离 功能，使Producer尽量选择未发生过发送失败的Broker作为目标 Broker。其可以保证其它消息尽量不发送到问题Broker，为了提升消息发送效率，降低消息发送耗时。
+
+如果超过重试次数，则抛出异常，由Producer去保证消息不丢。当然当生产者出现 RemotingException、MQClientException和MQBrokerException时，Producer会自动重投消息。
+
+
+
+
+
+
+
